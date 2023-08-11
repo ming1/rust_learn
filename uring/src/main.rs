@@ -37,7 +37,7 @@ fn file_size(f: &std::fs::File) -> Result<u64> {
 }
 
 const BS: usize = 4096;
-const QD: usize = 128;
+const QD: usize = 64;
 
 fn alloc_buf(size: usize) -> *mut u8 {
     let layout = Layout::from_size_align(size, 4096).unwrap();
@@ -62,12 +62,20 @@ fn main() -> io::Result<()> {
         .custom_flags(libc::O_DIRECT)
         .open(p)?;
 
+    let fds = [fd.as_raw_fd()];
+    ring.submitter().register_files(&fds).unwrap();
+
     let file_size = file_size(&fd).unwrap() & (!BS as u64);
 
-    let mut ios = Vec::<*mut u8>::new();
+    let mut iovecs = Vec::new();
     for _i in 0..QD {
-        ios.push(alloc_buf(BS));
+        let iovec = libc::iovec {
+            iov_base: alloc_buf(BS) as *mut libc::c_void,
+            iov_len: BS,
+        };
+        iovecs.push(iovec);
     }
+    unsafe { ring.submitter().register_buffers(&iovecs).unwrap() };
 
     let mut off = 0_u64;
     let mut done = 0;
@@ -75,10 +83,15 @@ fn main() -> io::Result<()> {
 
     loop {
         for i in 0..QD {
-            let sqe = &opcode::Read::new(types::Fd(fd.as_raw_fd()), ios[i], BS as u32)
-                .offset(off)
-                .build()
-                .user_data(i as u64);
+            let sqe = &opcode::ReadFixed::new(
+                types::Fixed(0),
+                iovecs[i].iov_base as *mut u8,
+                BS as u32,
+                i as u16,
+            )
+            .offset(off)
+            .build()
+            .user_data(i as u64);
             unsafe {
                 ring.submission()
                     .push(sqe)
@@ -106,7 +119,7 @@ fn main() -> io::Result<()> {
     }
 
     for i in 0..QD {
-        dealloc_buf(ios[i], BS);
+        dealloc_buf(iovecs[i].iov_base as *mut u8, BS);
     }
 
     Ok(())
