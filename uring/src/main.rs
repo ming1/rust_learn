@@ -49,6 +49,7 @@ fn dealloc_buf(ptr: *mut u8, size: usize) {
     unsafe { dealloc(ptr as *mut u8, layout) };
 }
 
+#[allow(unreachable_code)]
 fn main() -> io::Result<()> {
     let p = std::env::args().nth(1).expect("no file path given");
     let mut ring = IoUring::<squeue::Entry, cqueue::Entry>::builder()
